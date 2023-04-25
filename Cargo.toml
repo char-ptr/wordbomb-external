@@ -1,5 +1,5 @@
 [package]
-name = "cumin-cli"
+name = "wordbomb-external"
 version = "0.1.0"
 edition = "2021"
 

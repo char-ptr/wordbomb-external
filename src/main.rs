@@ -1,6 +1,6 @@
 use std::{collections::HashMap, ffi::{CString}, time::Duration, rc::Rc, cell::{RefCell, RefMut}, process::Command};
 
-use cumin_cli::faker_input::{FakerInput, keyboard_report::{KBDReport, KeyboardKey}, mouse_report::{MouseReport, MouseButtons}};
+use wordbomb_external::faker_input::{FakerInput, keyboard_report::{KBDReport, KeyboardKey}, mouse_report::{MouseReport, MouseButtons}};
 use mouse_position::mouse_position::Mouse;
 use rand::Rng;
 use windows::{Win32::{UI::{Input::KeyboardAndMouse::{*}, WindowsAndMessaging::{FindWindowA, SetForegroundWindow}}, Foundation::HWND}, core::{PCSTR}};
