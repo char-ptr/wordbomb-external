@@ -1,6 +1,8 @@
 # Word Bomb External
 this a completely external cheat for [wordbomb](https://www.roblox.com/games/2653064683). 
 
+**this *does* work with byfron**
+
 ## How does this work?
 it uses OCR to detect the letters on the screen and then uses a dictionary to find the best word. it then uses inputfaker to send the word to the game.
 
