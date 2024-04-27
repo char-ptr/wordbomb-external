@@ -1,25 +1,26 @@
 pub mod keyboard_report;
 pub mod mouse_report;
+
 use std::ffi::c_void;
 
-use self::{keyboard_report::KBDReport, mouse_report::MouseReport};
+use libloading::{Library, Symbol};
 
-type HNDL = *mut c_void;
+use self::{fn_types::UpdateAbsoluteMouse, keyboard_report::KBDReport, mouse_report::MouseReport};
 
-#[link(name = "FakerInputDll", kind = "dylib")]
-extern "C" {
-    pub fn fakerinput_alloc() -> *mut c_void;
-    pub fn fakerinput_free(vmulti: HNDL) -> c_void;
-    pub fn fakerinput_connect(vmulti: HNDL) -> bool;
-    pub fn fakerinput_disconnect(vmulti: HNDL) -> bool;
-    pub fn fakerinput_update_keyboard(vmulti: HNDL, shiftKeyFlags: u8, keyCodes: *const u8)
-        -> bool;
-    pub fn fakerinput_update_keyboard_enhanced(
-        vmulti: HNDL,
-        mediaKeys: u8,
-        enhancedKeys: u8,
-    ) -> bool;
-    pub fn fakerinput_update_relative_mouse(
+pub type HNDL = *mut c_void;
+mod fn_types {
+    use super::HNDL;
+    use std::ffi::c_void;
+
+    pub type Alloc = unsafe extern "C" fn() -> *mut c_void;
+    pub type Free = unsafe extern "C" fn(vmulti: HNDL) -> c_void;
+    pub type Connect = unsafe extern "C" fn(vmulti: HNDL) -> bool;
+    pub type Disconnect = unsafe extern "C" fn(vmulti: HNDL) -> bool;
+    pub type UpdateKeyboard =
+        unsafe extern "C" fn(vmulti: HNDL, shiftKeyFlags: u8, keyCodes: *const u8) -> bool;
+    pub type UpdateKeyboardEnhanced =
+        unsafe extern "C" fn(vmulti: HNDL, mediaKeys: u8, enhancedKeys: u8) -> bool;
+    pub type UpdateRelativeMouse = unsafe extern "C" fn(
         vmulti: HNDL,
         button: u8,
         x: i16,
@@ -27,7 +28,7 @@ extern "C" {
         wheelPosition: u8,
         hWheelPosition: u8,
     ) -> bool;
-    pub fn fakerinput_update_absolute_mouse(
+    pub type UpdateAbsoluteMouse = unsafe extern "C" fn(
         vmulti: HNDL,
         button: u8,
         x: u16,
@@ -37,25 +38,112 @@ extern "C" {
     ) -> bool;
 }
 
+struct FakerInputTableFnMap {
+    _lib: Library,
+}
+impl FakerInputTableFnMap {
+    fn alloc(&self) -> HNDL {
+        unsafe {
+            self._lib
+                .get::<Symbol<fn_types::Alloc>>(b"fakerinput_alloc")
+                .unwrap()()
+        }
+    }
+    fn free(&self, vmulti: HNDL) {
+        unsafe {
+            self._lib
+                .get::<Symbol<fn_types::Free>>(b"fakerinput_free")
+                .unwrap()(vmulti);
+        }
+    }
+    fn connect(&self, vmulti: HNDL) -> bool {
+        unsafe {
+            self._lib
+                .get::<Symbol<fn_types::Connect>>(b"fakerinput_connect")
+                .unwrap()(vmulti)
+        }
+    }
+    fn disconnect(&self, vmulti: HNDL) -> bool {
+        unsafe {
+            self._lib
+                .get::<Symbol<fn_types::Disconnect>>(b"fakerinput_disconnect")
+                .unwrap()(vmulti)
+        }
+    }
+    fn update_keyboard(&self, vmulti: HNDL, shiftKeyFlags: u8, keyCodes: *const u8) -> bool {
+        unsafe {
+            self._lib
+                .get::<Symbol<fn_types::UpdateKeyboard>>(b"fakerinput_update_keyboard")
+                .unwrap()(vmulti, shiftKeyFlags, keyCodes)
+        }
+    }
+    fn update_keyboard_enhanced(&self, vmulti: HNDL, mediaKeys: u8, enhancedKeys: u8) -> bool {
+        unsafe {
+            self._lib
+                .get::<Symbol<fn_types::UpdateKeyboardEnhanced>>(
+                    b"fakerinput_update_keyboard_enhanced",
+                )
+                .unwrap()(vmulti, mediaKeys, enhancedKeys)
+        }
+    }
+    fn update_relative_mouse(
+        &self,
+        vmulti: HNDL,
+        button: u8,
+        x: i16,
+        y: i16,
+        wheelPosition: u8,
+        hWheelPosition: u8,
+    ) -> bool {
+        unsafe {
+            self._lib
+                .get::<Symbol<fn_types::UpdateRelativeMouse>>(b"fakerinput_update_relative_mouse")
+                .unwrap()(vmulti, button, x, y, wheelPosition, hWheelPosition)
+        }
+    }
+    fn update_absolute_mouse(
+        &self,
+        vmulti: HNDL,
+        button: u8,
+        x: u16,
+        y: u16,
+        wheelPosition: u8,
+        hWheelPosition: u8,
+    ) -> bool {
+        unsafe {
+            self._lib
+                .get::<Symbol<fn_types::UpdateAbsoluteMouse>>(b"fakerinput_update_absolute_mouse")
+                .unwrap()(vmulti, button, x, y, wheelPosition, hWheelPosition)
+        }
+    }
+    unsafe fn new() -> Option<Self> {
+        println!("Loading library");
+        let lib = Library::new("./FakerInputDll.dll").ok()?;
+        Some(FakerInputTableFnMap { _lib: lib })
+    }
+}
 pub struct FakerInput {
     vmulti: HNDL,
     connected: bool,
+    map: FakerInputTableFnMap,
 }
 
 impl FakerInput {
-    pub fn new() -> Self {
-        let vmulti = unsafe { fakerinput_alloc() };
-        Self {
+    pub fn new() -> Option<Self> {
+        let table = unsafe { FakerInputTableFnMap::new()? };
+        let vmulti = table.alloc();
+        Some(Self {
             vmulti,
             connected: false,
-        }
+            map: table,
+        })
     }
 
     pub fn connect(&mut self) -> bool {
         if self.connected {
             return true;
         }
-        self.connected = unsafe { fakerinput_connect(self.vmulti) };
+        self.connected = unsafe { self.map.connect(self.vmulti) };
         self.connected
     }
 
@@ -63,7 +151,7 @@ impl FakerInput {
         if !self.connected {
             return true;
         }
-        self.connected = !unsafe { fakerinput_disconnect(self.vmulti) };
+        self.connected = !unsafe { self.map.disconnect(self.vmulti) };
         !self.connected
     }
 
@@ -73,7 +161,7 @@ impl FakerInput {
         }
         let codes = report.get_raw_key_codes();
         unsafe {
-            fakerinput_update_keyboard(
+            self.map.update_keyboard(
                 self.vmulti,
                 report.get_raw_shift_key_flags(),
                 codes.as_ptr(),
@@ -93,7 +181,7 @@ impl FakerInput {
             return false;
         }
         unsafe {
-            fakerinput_update_relative_mouse(
+            self.map.update_relative_mouse(
                 self.vmulti,
                 report.buttons,
                 report.x,
@@ -130,7 +218,6 @@ impl FakerInput {
 impl Drop for FakerInput {
     fn drop(&mut self) {
         self.disconnect();
-        unsafe { fakerinput_free(self.vmulti) };
+        unsafe { self.map.free(self.vmulti) };
     }
 }
-
