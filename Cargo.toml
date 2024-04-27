@@ -21,3 +21,4 @@ opencv = { git = "https://github.com/TDiblik/opencv-rust-nightly-compilation.git
 libloading = "0.8"
 rusty-tesseract = "1.1.10"
 image = "0.25"
+eyre = "0.6.12"

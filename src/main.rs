@@ -23,7 +23,11 @@ use std::{
     os::windows::thread,
     process::Command,
     rc::Rc,
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        atomic::AtomicBool,
+        mpsc::{Receiver, Sender},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -47,10 +51,14 @@ use windows_capture::{
     settings::Settings,
     window::Window,
 };
-use wordbomb_external::faker_input::{
-    keyboard_report::{KBDReport, KeyboardKey},
-    mouse_report::{MouseButtons, MouseReport},
-    FakerInput,
+use wordbomb_external::{
+    cv::{partial::process_partial, process_image},
+    faker_input::{
+        keyboard_report::{KBDReport, KeyboardKey},
+        mouse_report::{MouseButtons, MouseReport},
+        FakerInput,
+    },
+    Communication,
 };
 
 fn do_loop<'a>(
@@ -172,105 +180,57 @@ fn do_loop<'a>(
     Some(())
 }
 
-enum Communication {
-    Ignore,
-    Word(String),
-    GameStart((i32, i32)),
-}
 struct Capture {
     // The video encoder that will be used to encode the frames.
     tx: Sender<Communication>, // To measure the time the capture has been running
+    send_data: Arc<AtomicBool>,
 }
 
 impl GraphicsCaptureApiHandler for Capture {
     // The type of flags used to get the values from the settings.
-    type Flags = Sender<Communication>;
+    type Flags = (Sender<Communication>, Arc<AtomicBool>);
 
     // The type of error that can occur during capture, the error will be returned from `CaptureControl` and `start` functions.
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
     // Function that will be called to create the struct. The flags can be passed from settings.
     fn new(message: Self::Flags) -> Result<Self, Self::Error> {
-        Ok(Self { tx: message })
+        Ok(Self {
+            tx: message.0,
+            send_data: message.1,
+        })
     }
 
     // Called every time a new frame is available.
     fn on_frame_arrived(
         &mut self,
         frame: &mut Frame,
-        capture_control: InternalCaptureControl,
+        _: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
         // Send the frame to the video encoder
         // frame.save_as_image("./test.png", windows_capture::frame::ImageFormat::Png);
         // let cv2_vec = opencv::core::Vector;
+        let data = self.send_data.load(std::sync::atomic::Ordering::Relaxed);
+        // println!("Data: {}", data);
+        if !data {
+            return Ok(());
+        }
         let Ok(mut buf) = frame.buffer() else {
             return Ok(());
         };
-        let img = unsafe {
-            Mat::new_size_with_data(
-                Size_::new(buf.width() as i32, buf.height() as i32),
-                CV_8UC4,
-                buf.as_raw_nopadding_buffer()? as *mut _ as *mut _,
-                Mat_AUTO_STEP,
-            )
-        }?;
-        let mut bgr = Mat::default();
-        cvt_color(&img, &mut bgr, COLOR_RGBA2BGR, 0)?;
-        let mut ranged = Mat::default();
-        let lower_range = Scalar::from((36, 12, 10));
-        let upper_range = Scalar::from((40, 16, 14));
-        in_range(&bgr, &lower_range, &upper_range, &mut ranged)?;
-        let els = get_structuring_element(
-            MORPH_RECT,
-            Size_::new(3, 3),
-            opencv::core::Point_ { x: -1, y: -1 },
-        )?;
-        let mut out = Mat::default();
-        morphology_ex(
-            &ranged,
-            &mut out,
-            MORPH_OPEN,
-            &els,
-            opencv::core::Point_ { x: -1, y: -1 },
-            1,
-            BORDER_CONSTANT,
-            morphology_default_border_value()?,
-        )?;
-        let mut locations = Mat::default();
-        find_non_zero(&out, &mut locations)?;
-        let mut rect = bounding_rect(&locations)?;
-        rect += Point_::new(-10, -10);
-        rect += Size_::new(20, 20);
-        // println!("{:?}", rect);
-        // rectangle(&mut bgr, rect, Scalar::from((255, 0, 0)), 2, LINE_8, 0)?;
-        if let Ok(cropped) = ranged.roi(rect) {
-            let mut crop_mat = Mat::default();
-            cropped.copy_to(&mut crop_mat)?;
-            let mut final_out = Vector::default();
-            imencode(".jpg", &crop_mat, &mut final_out, &Vector::new())?;
-            fs::write("./test.jpg", &final_out)?;
-            // named_window("test", WINDOW_AUTOSIZE)?;
-            // imshow("test", &crop_mat).unwrap();
-            // wait_key(0)?;
-            let img = image::load_from_memory(&final_out.to_vec())?;
-            let img_tess = Image::from_dynamic_image(&img)?;
-
-            let mut args = Args::default();
-            args.lang = "eng".to_string();
-            args.psm = Some(6);
-            args.oem = Some(3);
-            args.dpi = Some(300);
-            args.config_variables = HashMap::from([(
-                "tessedit_char_whitelist".into(),
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
-            )]);
-            let out = image_to_string(&img_tess, &args)?;
-            self.tx.send(Communication::Word(out));
-            // named_window("test", WINDOW_AUTOSIZE)?;
-            // imshow("test", &crop_mat).unwrap();
-            // wait_key(0)?;
-        }
-
+        let out = process_image(
+            buf.width() as i32,
+            buf.height() as i32,
+            buf.as_raw_nopadding_buffer()?.as_ptr() as *const _,
+        );
+        match out {
+            Ok(part) => {
+                self.tx.send(part);
+            }
+            Err(e) => {
+                eprintln!("Error: {:?}", e);
+            }
+        };
         Ok(())
     }
 
@@ -284,7 +244,7 @@ impl GraphicsCaptureApiHandler for Capture {
 
 fn main() {
     let words: Vec<&str> = include_str!("../words.txt").split('\n').collect();
-    let seen_words: Rc<RefCell<Vec<&str>>> = Rc::new(RefCell::new(vec![]));
+    let mut seen_words: Vec<&str> = vec![];
 
     let mut key_map: HashMap<char, KeyboardKey> = HashMap::new();
 
@@ -324,23 +284,100 @@ fn main() {
 
     let (tx, rx) = std::sync::mpsc::channel();
     let rbxw = Window::from_name("Roblox").expect("unable to find roblox in processes");
+    let send_data = Arc::new(AtomicBool::new(true));
     let sets = Settings::new(
         rbxw,
         windows_capture::settings::CursorCaptureSettings::WithoutCursor,
         windows_capture::settings::DrawBorderSettings::WithoutBorder,
         windows_capture::settings::ColorFormat::Rgba8,
-        tx,
+        (tx, send_data.clone()),
     )
     .expect("wha");
+    let mut thd = rand::thread_rng();
     std::thread::spawn(move || {
-        while let Ok(msg) = rx.recv() {
-            match msg {
-                Communication::Word(x) => {
-                    println!("video stream sent sequence {}", x)
-                }
-                _ => {}
-            }
-        }
+        let cap = Capture::start(sets).expect("unable to start recording");
     });
-    let cap = Capture::start(sets).expect("unable to start recording");
+    while let Ok(msg) = rx.recv() {
+        match msg {
+            Communication::WordPart(word) => {
+                send_data
+                    .clone()
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                let flip = Flipper(send_data.clone());
+                if word.is_empty() {
+                    continue;
+                }
+                let lower = word.to_lowercase();
+                println!("video stream sent sequence {} ", word);
+                let wo: Vec<&&str> = words
+                        .iter()
+                        .filter(
+                            |x| x.contains(lower.trim()) && !seen_words.contains(x), /* && x.len() < max */
+                        )
+                        // .reduce(|a, b| if a.len() > b.len() { a } else { b });
+                        .collect();
+                if wo.is_empty() {
+                    println!("No words found");
+                    continue;
+                }
+
+                let Some(word) = wo.get(thd.gen_range(1..wo.len())) else {
+                    continue;
+                };
+
+                // asshole
+
+                // let word = words.iter()
+                // .filter(|x| x.contains(word.trim()) && !seen.contains(x) /* && x.len() < max */)
+                // .reduce(|a, b| if a.len() > b.len() { a } else { b })?;
+
+                println!("Word: {}", word);
+                // unsafe {
+                //     SetForegroundWindow(roblox_handle);
+                //     SetFocus(roblox_handle);
+                //     SetActiveWindow(roblox_handle);
+                //     std::thread::sleep(Duration::from_millis(300));
+                // }
+
+                let w = word.trim();
+                for (idx, c) in w.chars().enumerate() {
+                    // println!("Sending key: {}", c);
+                    let inp = key_map.get(&c).expect("bruh");
+
+                    let report = KBDReport::new().key_down(*inp);
+
+                    finp.update_keyboard(report);
+
+                    let report = KBDReport::new().key_up(*inp);
+
+                    finp.update_keyboard(report);
+
+                    let time = (w.len() as f64 * 4f64) - (idx as f64 * 1.3);
+
+                    let max_speed = thd.gen_range(40.0..47.0);
+
+                    // std::thread::sleep(Duration::from_millis(1));
+                    std::thread::sleep(Duration::from_millis((max_speed + (time % 80.0)) as u64));
+                }
+
+                let report = KBDReport::new().key_down(KeyboardKey::Enter);
+
+                finp.update_keyboard(report);
+
+                let report = KBDReport::new().key_up(KeyboardKey::Enter);
+
+                finp.update_keyboard(report);
+
+                seen_words.push(word);
+            }
+            Communication::Ignore => {}
+            _ => {}
+        }
+    }
+}
+struct Flipper(Arc<AtomicBool>);
+impl Drop for Flipper {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
