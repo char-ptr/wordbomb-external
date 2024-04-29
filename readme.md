@@ -22,4 +22,6 @@ it uses OCR to detect the letters on the screen and then uses a dictionary to fi
 
 ### notice
 1. Please note that the OCR / word detection is not perfect and normally slips up on I / L's due to the font which the game uses. Currently i don't know of a way to make it more reliable so it'll have to make do.
-2. I use a HDR monitor. the colours hardcoded for me may be different. if the tool doesn't work try changing upper_range and lower_range in cv/partial.rs
+2. I use a HDR monitor. the colours hardcoded for me may be different. if the tool doesn't work try changing upper_range(every rgb value +2) and lower_range (every rgb value -2) in cv/partial.rs to be the same colour as the letters in game when not completed. view image below.
+
+[![wordbomb imag eexample](https://i.imgur.com/raSX18l.png)]()
