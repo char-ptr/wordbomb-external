@@ -8,12 +8,18 @@ it uses OCR to detect the letters on the screen and then uses a dictionary to fi
 
 ## How to use?
 ### Requirements
-- tesseract you must install from scoop.
-- [python 3+](https://www.python.org/downloads/)
-- a recent version of [rust](https://rustup.rs/)
+- tesseract cli.
 - InputFaker (you can download with [ds4windows](https://github.com/Ryochan7/DS4Windows/releases) and when installing make sure to install inputfaker)
-### Steps
+### Requirements (build)
+- [opencv](https://github.com/twistedfall/opencv-rust/blob/master/INSTALL.md)
+- msvc compiler
+### Steps (build)
 
-1. git clone the repo `git clone https://github.com/pozm/wordbomb-external`
-2. pip install the requirements `pip install -r requirements.txt`. 
-3. build or run using `cargo build --release` or `cargo run --release` respectively.
+1. cargo build --release
+2. put all dlls in current working directory (when running).
+3. profit.
+
+
+### notice
+1. Please note that the OCR / word detection is not perfect and normally slips up on I / L's due to the font which the game uses. Currently i don't know of a way to make it more reliable so it'll have to make do.
+2. I use a HDR monitor. the colours hardcoded for me may be different. if the tool doesn't work try changing upper_range and lower_range in cv/partial.rs
